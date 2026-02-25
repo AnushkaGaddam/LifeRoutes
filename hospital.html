@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Hospital Emergency Dashboard</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
+
+    <style>
+        body { font-family: Arial; margin:0; padding:20px; background:linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);}
+        h2 { text-align:center; }
+        .alert { background:yellow; color:rgb(6, 6, 15); padding:15px; display:none; font-weight:bold; border-radius:5px; }
+        .box { background:whitesmoke; padding:15px; margin-top:15px; border-radius:8px; }
+        #map { height:400px; margin-top:10px; }
+    </style>
+</head>
+<body>
+<!-- Emergency Sound -->
+<audio id="emergencySound" preload="auto" loop>
+    <source src="siren.mp3" type="audio/mpeg">
+</audio>
+<h2><strong>Hospital Emergency Dashboard</strong></h2>
+<!-- EMERGENCY POPUP ALERT -->
+<div id="emergencyPopup" style="
+position:fixed;
+top:50%;
+left:50%;
+transform:translate(-50%, -50%) scale(0.8);
+background:white;
+padding:30px 40px;
+border-radius:15px;
+box-shadow:0 20px 60px rgba(0,0,0,0.3);
+z-index:9999;
+display:none;
+text-align:center;
+transition:0.3s ease;
+">
+
+<h2 style="color:#e74c3c;"> Emergency Alert!</h2>
+<p style="margin-top:10px;">New patient emergency received.</p>
+
+<button onclick="closePopup()" style="
+margin-top:20px;
+padding:8px 20px;
+background:#e74c3c;
+color:white;
+border:none;
+border-radius:20px;
+cursor:pointer;
+">
+OK
+</button>
+
+</div>
+
+<div class="box">
+    <h3><b>Emergency Details</b></h3>
+    <div id="dashboard">Waiting for emergency...</div>
+</div>
+
+<div class="box">
+    <h3><b>Live Map</b></h3>
+    <div id="map"></div>
+</div>
+
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+<script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+
+<script>
+    // nlock sound on first user interaction
+document.addEventListener("click", function enableSound() {
+    const sound = document.getElementById("emergencySound");
+    sound.play().then(() => {
+        sound.pause();
+        sound.currentTime = 0;
+    }).catch(()=>{});
+    
+    document.removeEventListener("click", enableSound);
+});
+let map = L.map('map').setView([16.4643, 80.5298], 13);
+
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
+    attribution:'© OpenStreetMap'
+}).addTo(map);
+
+let patientMarker, hospitalMarker, routeLine;
+
+let totalICU = 45;
+let allocatedICU = 20;
+let remainingICU = totalICU - allocatedICU;
+
+const socket = io("http://localhost:5000");
+
+socket.on("connect", () => {
+    console.log("Dashboard Connected ");
+});
+function showPopup(){
+    const popup = document.getElementById("emergencyPopup");
+    const sound = document.getElementById("emergencySound");
+
+    popup.style.display = "block";
+
+    setTimeout(()=>{
+        popup.style.transform = "translate(-50%, -50%) scale(1)";
+    },50);
+
+  // Play alarm sound
+sound.volume = 1.0; // full volume
+sound.loop = true;
+sound.currentTime = 0;
+
+sound.play().then(()=>{
+    console.log("Siren playing");
+}).catch(err=>{
+    console.log("Autoplay blocked:", err);
+});
+    // Auto close after 5 seconds
+    setTimeout(()=>{
+        closePopup();
+    },5000);
+}
+function playShortBuzzer(){
+
+    const sound = document.getElementById("emergencySound");
+
+    sound.loop = false;
+    sound.currentTime = 0;
+    sound.play();
+
+    setTimeout(()=>{
+        sound.pause();
+        sound.currentTime = 0;
+    },5000); // 5 seconds
+}
+
+function playArrivalBuzzer(){
+
+    const sound = document.getElementById("emergencySound");
+
+    sound.loop = false;
+    sound.currentTime = 0;
+    sound.play();
+
+    setTimeout(()=>{
+        sound.pause();
+        sound.currentTime = 0;
+    },3000); // 3 seconds arrival confirmation
+}
+function closePopup(){
+    const popup = document.getElementById("emergencyPopup");
+    const sound = document.getElementById("emergencySound");
+
+    popup.style.transform = "translate(-50%, -50%) scale(0.8)";
+    
+    // Stop sound
+    sound.pause();
+    sound.currentTime = 0;
+
+    setTimeout(()=>{
+        popup.style.display = "none";
+    },200);
+}
+socket.on("patientAlert", async (data) => {
+
+    console.log(" Received:", data);
+
+    showPopup();
+
+    if(data.icuNeeded && remainingICU > 0){
+        allocatedICU++;
+        remainingICU = totalICU - allocatedICU;
+    }
+
+    document.getElementById("dashboard").innerHTML = `
+        <p><b>Hospital:</b> ${data.hospitalName}</p>
+        <p><b>Distance:</b> ${data.distance} km</p>
+        <p><b>Condition:</b> ${data.condition}</p>
+        <p><b>Available ICU Beds:</b> ${remainingICU}</p>
+    `;
+
+    if(patientMarker) map.removeLayer(patientMarker);
+    if(hospitalMarker) map.removeLayer(hospitalMarker);
+    if(routeLine) map.removeLayer(routeLine);
+
+    const patientLat = data.location.lat;
+    const patientLng = data.location.lng;
+    const hospitalLat = data.hospitalLat;
+    const hospitalLng = data.hospitalLng;
+
+    patientMarker = L.marker([patientLat, patientLng])
+        .addTo(map)
+        .bindPopup("Patient")
+        .openPopup();
+
+    hospitalMarker = L.marker([hospitalLat, hospitalLng])
+        .addTo(map)
+        .bindPopup("Hospital")
+        .openPopup();
+
+    try {
+        const response = await fetch(
+            `https://router.project-osrm.org/route/v1/driving/${patientLng},${patientLat};${hospitalLng},${hospitalLat}?overview=full&geometries=geojson`
+        );
+
+        const routeData = await response.json();
+        const latlngs = routeData.routes[0].geometry.coordinates.map(c => [c[1], c[0]]);
+
+        routeLine = L.polyline(latlngs, {color:'red', weight:5}).addTo(map);
+
+        map.fitBounds(routeLine.getBounds());
+
+    } catch(err){
+        console.error("Route error:", err);
+    }
+
+});
+// ================= TRAFFIC FLOW EVENTS =================
+
+// 5 MIN BEFORE ARRIVAL
+socket.on("dashboardPrepare", (data) => {
+
+    console.log("Hospital Prepare Alert:", data);
+
+    document.getElementById("dashboard").innerHTML += `
+        <hr>
+        <p style="color:orange;font-weight:bold;">
+          Ambulance arriving in ${data.eta} minutes
+        </p>
+    `;
+
+    playShortBuzzer();
+});
+
+
+// AMBULANCE REACHED
+socket.on("dashboardReached", (data) => {
+
+    console.log("Ambulance Reached:", data);
+
+    document.getElementById("dashboard").innerHTML += `
+        <hr>
+        <p style="color:green;font-weight:bold;">
+          Ambulance Reached Hospital
+        </p>
+    `;
+
+    playArrivalBuzzer();
+});
+</script>
+
+</body>
+</html>

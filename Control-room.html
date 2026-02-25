@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Smart Emergency Control Room</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+
+<style>
+
+body{
+    margin:0;
+    font-family: 'Poppins', sans-serif;
+    background: #f1f8ff;
+    color:#2c3e50;
+    overflow:hidden;
+}
+
+header{
+    padding:18px;
+    text-align:center;
+    font-size:24px;
+    font-weight:600;
+    background: linear-gradient(90deg,#eceff1,#ece8f0);
+    color:white;
+    letter-spacing:1px;
+}
+
+.container{
+    display:flex;
+    height:calc(100vh - 70px);
+}
+
+/* LEFT PANEL */
+.left-panel{
+    width:28%;
+    padding:25px;
+    background:white;
+    border-right:1px solid #dfe6e9;
+}
+
+.button{
+    padding:14px;
+    width:100%;
+    border:none;
+    border-radius:10px;
+    font-size:16px;
+    font-weight:600;
+    cursor:pointer;
+    margin-bottom:20px;
+    transition:0.3s;
+}
+
+.generate{
+    background: rgb(133, 223, 133);
+    color:white;
+}
+
+.generate:hover{
+    transform:scale(1.05);
+}
+
+.status-card{
+    background:#f1f5f9;
+    padding:15px;
+    border-radius:12px;
+    margin-bottom:10px;
+    box-shadow:0 4px 10px rgba(0,0,0,0.05);
+}
+
+/* CALL POPUP */
+.call-popup{
+    position:fixed;
+    top:25px;
+    right:25px;
+    background:rgb(228, 67, 67);
+    padding:20px;
+    border-radius:15px;
+    box-shadow:0 10px 30px rgba(0,0,0,0.2);
+    display:none;
+    z-index:1000;
+    animation:slide 0.5s ease;
+}
+
+@keyframes slide{
+    from{transform:translateY(-20px);opacity:0;}
+    to{transform:translateY(0);opacity:1;}
+}
+
+.answer-btn{
+    margin-top:10px;
+    padding:8px 14px;
+    background:hsl(120, 64%, 59%);
+    color:white;
+    border:none;
+    border-radius:8px;
+    cursor:pointer;
+    font-weight:600;
+}
+
+/* RIGHT PANEL */
+.right-panel{
+    flex:1;
+    padding:25px;
+    position:relative;
+}
+
+.map-box{
+    background:whitesmoke;
+    height:65%;
+    border-radius:20px;
+    position:relative;
+    overflow:hidden;
+    box-shadow:0 10px 30px rgba(0,0,0,0.08);
+}
+
+.ambulance, .patient{
+    position:absolute;
+    font-size:28px;
+    transition:0.1s linear;
+}
+
+.patient{
+    font-size:26px;
+}
+
+.logs{
+    margin-top:20px;
+    height:28%;
+    overflow-y:auto;
+    background:white;
+    border-radius:15px;
+    padding:15px;
+    box-shadow:0 4px 15px rgba(0,0,0,0.05);
+    font-size:14px;
+}
+
+.log-item{
+    margin-bottom:8px;
+}
+
+</style>
+</head>
+<body>
+
+<header><h1 style="color: rgb(2, 10, 1);">EMERGENCY CONTROL ROOM</h1></header>
+
+<div class="container">
+
+<div class="left-panel">
+<button class="button generate" onclick="generateCall()">📞 Generate Incoming Call</button>
+
+<h3>Ambulance Status</h3>
+<div id="ambulanceStatus"></div>
+</div>
+
+<div class="right-panel">
+
+<div class="map-box" id="map"></div>
+
+<div class="logs" id="logs"></div>
+
+</div>
+
+</div>
+
+<!-- CALL POPUP -->
+<div class="call-popup" id="callBox">
+📞 Incoming Emergency Call...
+<br>
+<button class="answer-btn" onclick="answerCall()">Answer</button>
+</div>
+
+<script>
+
+let map = document.getElementById("map");
+let logs = document.getElementById("logs");
+let ambulanceStatus = document.getElementById("ambulanceStatus");
+let callBox = document.getElementById("callBox");
+
+let ambulances = [];
+let patient = null;
+
+/* CREATE RANDOM AMBULANCES */
+function initAmbulances(){
+    for(let i=0;i<4;i++){
+        let amb = document.createElement("div");
+        amb.className="ambulance";
+        amb.innerHTML="🚑";
+
+        let x = Math.random()*80 + 5;
+        let y = Math.random()*80 + 5;
+
+        amb.style.left = x + "%";
+        amb.style.top = y + "%";
+
+        map.appendChild(amb);
+
+        ambulances.push({
+            element:amb,
+            x:x,
+            y:y,
+            available:true
+        });
+    }
+    updateAmbulanceStatus();
+}
+
+function updateAmbulanceStatus(){
+    ambulanceStatus.innerHTML="";
+    ambulances.forEach((a,i)=>{
+        ambulanceStatus.innerHTML +=
+        `<div class="status-card">
+        🚑 Ambulance ${i+1} : 
+        ${a.available ? "<span style='color:green'>Available</span>" :
+        "<span style='color:red'>Dispatched</span>"}
+        </div>`;
+    });
+}
+
+function generateCall(){
+    callBox.style.display="block";
+    addLog("Incoming call received.");
+}
+
+function answerCall(){
+    callBox.style.display="none";
+    addLog("Detecting caller location...");
+
+    if(patient) patient.remove();
+
+    patient = document.createElement("div");
+    patient.className="patient";
+    patient.innerHTML="📍";
+
+    let px = Math.random()*80 + 5;
+    let py = Math.random()*80 + 5;
+
+    patient.style.left = px + "%";
+    patient.style.top = py + "%";
+
+    map.appendChild(patient);
+
+    dispatchNearest(px,py);
+}
+
+function dispatchNearest(px,py){
+    let minDist = Infinity;
+    let selected = null;
+
+    ambulances.forEach(a=>{
+        if(a.available){
+            let dist = Math.sqrt((a.x-px)**2 + (a.y-py)**2);
+            if(dist < minDist){
+                minDist = dist;
+                selected = a;
+            }
+        }
+    });
+
+    if(!selected){
+        addLog("No available ambulances!");
+        return;
+    }
+
+    selected.available=false;
+    updateAmbulanceStatus();
+    addLog("Dispatching nearest ambulance...");
+
+    moveAmbulance(selected,px,py);
+}
+
+function moveAmbulance(ambulance, px, py){
+    let interval = setInterval(()=>{
+        if(Math.abs(ambulance.x-px)<0.5 && Math.abs(ambulance.y-py)<0.5){
+            clearInterval(interval);
+            addLog("Ambulance reached patient.");
+            return;
+        }
+
+        ambulance.x += (px-ambulance.x)*0.02;
+        ambulance.y += (py-ambulance.y)*0.02;
+
+        ambulance.element.style.left = ambulance.x + "%";
+        ambulance.element.style.top = ambulance.y + "%";
+
+    },100);
+}
+
+function addLog(text){
+    let item = document.createElement("div");
+    item.className="log-item";
+    item.innerText = new Date().toLocaleTimeString()+" - "+text;
+    logs.appendChild(item);
+    logs.scrollTop = logs.scrollHeight;
+}
+
+initAmbulances();
+
+</script>
+
+</body>
+</html>

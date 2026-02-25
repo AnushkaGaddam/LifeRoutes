@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LifeRoute AI | Smart Traffic Flow</title>
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+
+<style>
+body { margin:0; font-family: Arial; background:linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%); }
+#map { height:100vh; width:100%; }
+
+.hud {
+position:absolute;
+top:20px;
+left:20px;
+background:white;
+padding:20px;
+border-radius:15px;
+box-shadow:0 10px 25px rgba(0,0,0,0.1);
+z-index:1000;
+width:300px;
+}
+
+.hud h3 { margin:5px 0; font-size:14px; color:#555; }
+.hud span { font-size:22px; font-weight:bold; }
+
+#setupOverlay{
+position:fixed;
+inset:0;
+background:white;
+display:flex;
+flex-direction:column;
+justify-content:center;
+align-items:center;
+z-index:2000;
+}
+
+button{
+padding:15px 40px;
+border:none;
+background:#051a47;
+color:white;
+border-radius:30px;
+cursor:pointer;
+font-size:16px;
+}
+</style>
+</head>
+<body>
+
+<div id="setupOverlay">
+<h1>LifeRoute AI Emergency</h1>
+<p>Finding nearest facility-based hospital...</p>
+<button onclick="startSystem()">INITIALIZE</button>
+</div>
+
+<div id="map"></div>
+
+<div class="hud">
+<h3>ETA</h3>
+<span id="eta">--</span>
+<h3>Nearest Hospital</h3>
+<span id="hospitalName">Locating...</span>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+
+<script>
+
+// ================= SOCKET =================
+const socket = io("http://localhost:5000");
+
+// ================= GLOBALS =================
+let map;
+let ambulance;
+let routeCoords = [];
+let trafficSegments = [];
+let currentIndex = 0;
+let hospitalNotified = false;
+let totalTime = 0;
+let selectedCondition = "Heart";
+
+// ================= REQUIREMENTS =================
+const requirements = {
+Heart:['ICU','Oxygen'],
+Accident:['Trauma','Surgery'],
+Labour:['Maternity','ICU'],
+Breathing:['Ventilator','Oxygen']
+};
+
+// ================= START =================
+function startSystem(){
+navigator.geolocation.getCurrentPosition(pos=>{
+document.getElementById("setupOverlay").style.display="none";
+initMap(pos.coords.latitude,pos.coords.longitude);
+});
+}
+
+// ================= INIT MAP =================
+async function initMap(userLat,userLng){
+
+map = L.map('map').setView([userLat,userLng],14);
+
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+
+L.marker([userLat,userLng]).addTo(map).bindPopup("You").openPopup();
+
+const query = `[out:json];node["amenity"="hospital"](around:5000,${userLat},${userLng});out;`;
+
+const res = await fetch("https://overpass-api.de/api/interpreter",{
+method:"POST",
+body:query
+});
+
+const data = await res.json();
+
+let hospitals = data.elements.map(h=>{
+const dist = getDist(userLat,userLng,h.lat,h.lon);
+
+const facilities = {
+ICU:Math.random()>0.3,
+Oxygen:true,
+Trauma:Math.random()>0.5,
+Surgery:Math.random()>0.5,
+Maternity:Math.random()>0.5,
+Ventilator:Math.random()>0.5
+};
+
+const req = requirements[selectedCondition] || [];
+const score = req.filter(r=>facilities[r]).length;
+
+return {
+name:h.tags.name || "Hospital",
+lat:h.lat,
+lng:h.lon,
+dist,
+score
+};
+});
+
+hospitals.sort((a,b)=>b.score-a.score || a.dist-b.dist);
+
+const best = hospitals[0];
+
+document.getElementById("hospitalName").innerText =
+best.name + " ("+best.score+" match)";
+
+L.marker([best.lat,best.lng]).addTo(map).bindPopup(best.name);
+
+drawRoute(userLat,userLng,best.lat,best.lng,best.name);
+}
+
+// ================= DRAW ROUTE =================
+async function drawRoute(uLat,uLng,hLat,hLng,hospitalName){
+
+const url = `https://router.project-osrm.org/route/v1/driving/${uLng},${uLat};${hLng},${hLat}?overview=full&geometries=geojson`;
+
+const res = await fetch(url);
+const data = await res.json();
+
+routeCoords = data.routes[0].geometry.coordinates.map(c=>[c[1],c[0]]);
+
+// Base road
+L.polyline(routeCoords,{color:'#cbd5e1',weight:12}).addTo(map);
+
+// Blue route
+L.polyline(routeCoords,{color:'#2563eb',weight:6}).addTo(map);
+
+// ===== CREATE SMALL RED PATCHES =====
+for(let i=30;i<routeCoords.length;i+=60){
+
+const start=i;
+const end=i+8;
+
+let redLine = L.polyline(routeCoords.slice(start,end),{
+color:'#dc2626',
+weight:6
+}).addTo(map);
+
+trafficSegments.push({
+start,
+end,
+polyline:redLine,
+cleared:false,
+alerted:false
+});
+}
+
+// Ambulance icon
+const ambIcon = L.icon({
+iconUrl:"https://cdn-icons-png.flaticon.com/512/684/684908.png",
+iconSize:[30,30],
+iconAnchor:[15,30]
+});
+
+ambulance = L.marker(routeCoords[0],{icon:ambIcon}).addTo(map);
+
+moveAmbulance(hospitalName);
+}
+
+// ================= MOVE AMBULANCE =================
+function moveAmbulance(hospitalName){
+
+if(currentIndex>=routeCoords.length-1){
+
+socket.emit("ambulanceReached",{
+hospital:hospitalName,
+timeTaken: totalTime + " mins"
+});
+
+return;
+}
+
+currentIndex++;
+const point = routeCoords[currentIndex];
+ambulance.setLatLng(point);
+
+let delay=400;
+
+// CHECK TRAFFIC SEGMENTS
+trafficSegments.forEach(segment=>{
+
+// 🔔 BEFORE TRAFFIC
+if(currentIndex+15>=segment.start && !segment.alerted){
+segment.alerted=true;
+
+showTrafficWarning();
+
+socket.emit("trafficPoliceAlert",{
+message:"Heavy traffic ahead. Clear route immediately.",
+hospital:hospitalName,
+eta:totalTime
+});
+}
+
+// 🚦 CLEAR WHEN ENTERING
+if(currentIndex>=segment.start && currentIndex<=segment.end && !segment.cleared){
+segment.cleared=true;
+
+map.removeLayer(segment.polyline);
+
+L.polyline(routeCoords.slice(segment.start,segment.end),{
+color:'#2563eb',
+weight:6
+}).addTo(map);
+}
+});
+
+// Slow inside red zone
+trafficSegments.forEach(segment=>{
+if(currentIndex>=segment.start && currentIndex<=segment.end && !segment.cleared){
+delay=900;
+}
+});
+
+totalTime = Math.ceil((routeCoords.length-currentIndex)/4);
+document.getElementById("eta").innerText = totalTime + " mins";
+
+// Hospital prepare
+if(totalTime<=5 && !hospitalNotified){
+hospitalNotified=true;
+
+socket.emit("hospitalPrepare",{
+hospital:hospitalName,
+eta:totalTime
+});
+}
+
+setTimeout(()=>moveAmbulance(hospitalName),delay);
+}
+
+// ================= WARNING POPUP =================
+function showTrafficWarning(){
+
+const warning=document.createElement("div");
+
+warning.style.position="absolute";
+warning.style.top="120px";
+warning.style.left="50%";
+warning.style.transform="translateX(-50%)";
+warning.style.background="#facc15";
+warning.style.color="black";
+warning.style.padding="15px 30px";
+warning.style.borderRadius="10px";
+warning.style.fontWeight="bold";
+warning.style.boxShadow="0 5px 20px rgba(0,0,0,0.2)";
+warning.style.zIndex="3000";
+warning.innerText="⚠ Traffic Ahead! Police Notified.";
+
+document.body.appendChild(warning);
+
+setTimeout(()=>warning.remove(),4000);
+}
+
+// ================= DISTANCE =================
+function getDist(lat1,lon1,lat2,lon2){
+const R=6371;
+const dLat=(lat2-lat1)*Math.PI/180;
+const dLon=(lon2-lon1)*Math.PI/180;
+const a=Math.sin(dLat/2)**2+
+Math.cos(lat1*Math.PI/180)*
+Math.cos(lat2*Math.PI/180)*
+Math.sin(dLon/2)**2;
+return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
+}
+
+</script>
+</body>
+</html>

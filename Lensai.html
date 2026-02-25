@@ -1,0 +1,469 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Emergency AI Assistant</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@300;400;500&display=swap');
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    min-height: 100vh;
+    background: #0a0a0f;
+    background-image: radial-gradient(ellipse at 20% 50%, #1a0a1e 0%, transparent 60%),
+                      radial-gradient(ellipse at 80% 20%, #0f0a1a 0%, transparent 50%);
+    font-family: 'DM Sans', sans-serif;
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+  }
+
+  .page-hint {
+    text-align: center;
+    opacity: 0.2;
+    user-select: none;
+    pointer-events: none;
+  }
+  .page-hint h1 {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: clamp(2rem, 6vw, 4rem);
+    letter-spacing: 0.1em;
+    color: #fff;
+  }
+  .page-hint p { font-size: 0.85rem; color: #888; margin-top: 8px; }
+
+  /* ── Floating Button ── */
+  #floatBtn {
+    position: fixed;
+    bottom: 32px;
+    right: 32px;
+    width: 64px;
+    height: 64px;
+    border-radius: 50%;
+    border: none;
+    cursor: grab;
+    z-index: 9999;
+    background: radial-gradient(circle at 35% 35%, #ff4d4d, #c0000a);
+    box-shadow: 0 4px 24px rgba(220,0,0,0.5), 0 0 0 0 rgba(220,0,0,0.4);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    touch-action: none;
+    transition: transform 0.15s ease;
+    animation: pulse 2.2s ease-in-out infinite;
+  }
+  #floatBtn:hover { transform: scale(1.08); }
+  #floatBtn:active { cursor: grabbing; transform: scale(0.95); }
+
+  #floatBtn svg { pointer-events: none; }
+
+  @keyframes pulse {
+    0%   { box-shadow: 0 4px 24px rgba(220,0,0,0.5), 0 0 0 0 rgba(220,0,0,0.45); }
+    60%  { box-shadow: 0 4px 24px rgba(220,0,0,0.5), 0 0 0 18px rgba(220,0,0,0); }
+    100% { box-shadow: 0 4px 24px rgba(220,0,0,0.5), 0 0 0 0 rgba(220,0,0,0); }
+  }
+
+  /* ── Scanner Overlay ── */
+  #scanOverlay {
+    display: none;
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.92);
+    z-index: 10000;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 20px;
+  }
+  #scanOverlay.active { display: flex; }
+
+  .scan-label {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 1.1rem;
+    letter-spacing: 0.25em;
+    color: #ff4d4d;
+    opacity: 0.9;
+  }
+
+  .cam-wrap {
+    position: relative;
+    width: 220px;
+    height: 220px;
+    border-radius: 50%;
+    overflow: hidden;
+    border: 2px solid rgba(255,77,77,0.4);
+    box-shadow: 0 0 40px rgba(255,0,0,0.3);
+  }
+
+  #camFeed {
+    width: 100%; height: 100%;
+    object-fit: cover;
+    transform: scaleX(-1);
+    filter: brightness(0.9) contrast(1.1);
+  }
+
+  .scan-line {
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, transparent, #ff4d4d, transparent);
+    animation: scanLine 1.4s ease-in-out infinite;
+  }
+  @keyframes scanLine {
+    0%   { top: 0%; opacity: 0; }
+    10%  { opacity: 1; }
+    90%  { opacity: 1; }
+    100% { top: 100%; opacity: 0; }
+  }
+
+  .mic-ring {
+    width: 48px; height: 48px;
+    border-radius: 50%;
+    background: rgba(255,77,77,0.1);
+    border: 1.5px solid rgba(255,77,77,0.5);
+    display: flex; align-items: center; justify-content: center;
+    animation: micPulse 1s ease-in-out infinite;
+  }
+  @keyframes micPulse {
+    0%, 100% { transform: scale(1); opacity: 0.8; }
+    50%       { transform: scale(1.15); opacity: 1; }
+  }
+
+  .timer-ring {
+    position: relative;
+    width: 48px; height: 48px;
+  }
+  .timer-ring svg { transform: rotate(-90deg); }
+  .timer-ring circle {
+    fill: none;
+    stroke: rgba(255,255,255,0.1);
+    stroke-width: 3;
+  }
+  .timer-ring .progress {
+    stroke: #ff4d4d;
+    stroke-linecap: round;
+    stroke-dasharray: 132;
+    stroke-dashoffset: 132;
+    transition: stroke-dashoffset 0.1s linear;
+  }
+  .timer-text {
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 1rem;
+    color: #fff;
+  }
+
+  /* ── Result Popup ── */
+  #resultPopup {
+    display: none;
+    position: fixed; inset: 0;
+    z-index: 10001;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0,0,0,0.85);
+    backdrop-filter: blur(6px);
+    animation: fadeIn 0.3s ease;
+  }
+  #resultPopup.active { display: flex; }
+
+  @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+  .popup-card {
+    position: relative;
+    width: min(340px, 88vw);
+    border-radius: 24px;
+    padding: 40px 32px 32px;
+    text-align: center;
+    background: #111117;
+    border: 1px solid rgba(255,255,255,0.06);
+    box-shadow: 0 32px 80px rgba(0,0,0,0.6);
+    animation: popIn 0.35s cubic-bezier(0.34,1.56,0.64,1);
+  }
+  @keyframes popIn {
+    from { transform: scale(0.7); opacity: 0; }
+    to   { transform: scale(1);   opacity: 1; }
+  }
+
+  .popup-icon {
+    width: 64px; height: 64px;
+    border-radius: 50%;
+    margin: 0 auto 20px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 28px;
+  }
+
+  .severity-label {
+    font-size: 0.7rem;
+    letter-spacing: 0.3em;
+    text-transform: uppercase;
+    color: #555;
+    margin-bottom: 8px;
+  }
+
+  .severity-text {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 3.2rem;
+    letter-spacing: 0.05em;
+    line-height: 1;
+  }
+
+  .severity-sub {
+    margin-top: 12px;
+    font-size: 0.78rem;
+    color: #666;
+    line-height: 1.6;
+  }
+
+  .popup-close {
+    margin-top: 28px;
+    width: 100%;
+    padding: 12px;
+    border-radius: 12px;
+    border: none;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.88rem;
+    font-weight: 500;
+    letter-spacing: 0.05em;
+    cursor: pointer;
+    background: rgba(255,255,255,0.06);
+    color: #aaa;
+    transition: background 0.2s, color 0.2s;
+  }
+  .popup-close:hover { background: rgba(255,255,255,0.12); color: #fff; }
+
+  /* color themes */
+  .theme-critical .popup-icon { background: rgba(255,59,59,0.15); }
+  .theme-critical .severity-text { color: #ff3b3b; }
+  .theme-critical .popup-card { box-shadow: 0 32px 80px rgba(0,0,0,0.6), 0 0 40px rgba(255,50,50,0.1); }
+
+  .theme-moderate .popup-icon { background: rgba(255,150,30,0.15); }
+  .theme-moderate .severity-text { color: #ff9400; }
+  .theme-moderate .popup-card { box-shadow: 0 32px 80px rgba(0,0,0,0.6), 0 0 40px rgba(255,150,0,0.1); }
+
+  .theme-stable .popup-icon { background: rgba(40,210,130,0.15); }
+  .theme-stable .severity-text { color: #28d282; }
+  .theme-stable .popup-card { box-shadow: 0 32px 80px rgba(0,0,0,0.6), 0 0 40px rgba(40,210,130,0.1); }
+</style>
+</head>
+<body>
+
+<div class="page-hint">
+  <h1>Emergency AI</h1>
+  <p>Tap the red icon to begin scanning</p>
+</div>
+
+<!-- Floating Button -->
+<button id="floatBtn" title="Emergency AI Scan">
+  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+    <line x1="12" y1="8" x2="12" y2="12"/>
+    <line x1="12" y1="16" x2="12.01" y2="16"/>
+  </svg>
+</button>
+
+<!-- Scanner Overlay -->
+<div id="scanOverlay">
+  <div class="scan-label">SCANNING VITALS</div>
+  <div class="cam-wrap">
+    <video id="camFeed" autoplay muted playsinline></video>
+    <div class="scan-line"></div>
+  </div>
+  <div style="display:flex;gap:20px;align-items:center">
+    <div class="mic-ring">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#ff4d4d" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+        <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+        <line x1="12" y1="19" x2="12" y2="23"/>
+      </svg>
+    </div>
+    <div class="timer-ring">
+      <svg viewBox="0 0 48 48" width="48" height="48">
+        <circle cx="24" cy="24" r="21"/>
+        <circle class="progress" id="timerCircle" cx="24" cy="24" r="21"/>
+      </svg>
+      <div class="timer-text" id="timerText">3</div>
+    </div>
+  </div>
+</div>
+
+<!-- Result Popup -->
+<div id="resultPopup">
+  <div class="popup-card" id="popupCard">
+    <div class="popup-icon" id="popupIcon"></div>
+    <div class="severity-label">Assessment Complete</div>
+    <div class="severity-text" id="severityText">–</div>
+    <div class="severity-sub" id="severityDesc"></div>
+    <button class="popup-close" id="popupClose">Dismiss</button>
+  </div>
+</div>
+
+<script>
+const btn = document.getElementById('floatBtn');
+const scanOverlay = document.getElementById('scanOverlay');
+const camFeed = document.getElementById('camFeed');
+const timerCircle = document.getElementById('timerCircle');
+const timerText = document.getElementById('timerText');
+const resultPopup = document.getElementById('resultPopup');
+const popupCard = document.getElementById('popupCard');
+const popupIcon = document.getElementById('popupIcon');
+const severityText = document.getElementById('severityText');
+const severityDesc = document.getElementById('severityDesc');
+const popupClose = document.getElementById('popupClose');
+
+// ── Drag ──
+let dragging = false, ox = 0, oy = 0, moved = false;
+btn.addEventListener('pointerdown', e => {
+  dragging = true; moved = false;
+  ox = e.clientX - btn.getBoundingClientRect().left;
+  oy = e.clientY - btn.getBoundingClientRect().top;
+  btn.setPointerCapture(e.pointerId);
+});
+btn.addEventListener('pointermove', e => {
+  if (!dragging) return;
+  moved = true;
+  const x = e.clientX - ox;
+  const y = e.clientY - oy;
+  btn.style.left = x + 'px';
+  btn.style.top  = y + 'px';
+  btn.style.right = 'auto';
+  btn.style.bottom = 'auto';
+});
+btn.addEventListener('pointerup', e => {
+  dragging = false;
+  if (!moved) startScan();
+});
+
+// ── State ──
+let stream = null, recognition = null, keywords = [];
+let brightScore = 0, speechScore = 0;
+
+const CRISIS_WORDS = ['help','pain','hurt','chest','can\'t breathe','dizzy','unconscious','emergency','dying','heart','bleed','fall','collapsed','stroke','seize','nausea'];
+const MODERATE_WORDS = ['uncomfortable','sore','tired','weak','nauseous','headache','fever','ache','pressure','anxious','confused'];
+
+async function startScan() {
+  keywords = []; brightScore = 0; speechScore = 0;
+  scanOverlay.classList.add('active');
+
+  // Camera
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: false });
+    camFeed.srcObject = stream;
+  } catch(e) { brightScore = 50; }
+
+  // Speech
+  try {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (SR) {
+      recognition = new SR();
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.onresult = e => {
+        for (let i = e.resultIndex; i < e.results.length; i++) {
+          const t = e.results[i][0].transcript.toLowerCase();
+          keywords.push(t);
+        }
+      };
+      recognition.start();
+    }
+  } catch(e) {}
+
+  // Timer
+  const TOTAL = 3000;
+  const circumference = 132;
+  const start = Date.now();
+
+  const tick = setInterval(() => {
+    const elapsed = Date.now() - start;
+    const progress = Math.min(elapsed / TOTAL, 1);
+    timerCircle.style.strokeDashoffset = circumference * (1 - progress);
+    const remaining = Math.ceil((TOTAL - elapsed) / 1000);
+    timerText.textContent = Math.max(remaining, 0);
+
+    // Brightness sampling
+    if (stream && camFeed.readyState >= 2) {
+      brightScore = sampleBrightness();
+    }
+
+    if (elapsed >= TOTAL) {
+      clearInterval(tick);
+      finalizeScan();
+    }
+  }, 100);
+}
+
+function sampleBrightness() {
+  try {
+    const canvas = document.createElement('canvas');
+    canvas.width = 64; canvas.height = 64;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(camFeed, 0, 0, 64, 64);
+    const d = ctx.getImageData(0,0,64,64).data;
+    let sum = 0;
+    for (let i = 0; i < d.length; i += 4) {
+      sum += 0.299 * d[i] + 0.587 * d[i+1] + 0.114 * d[i+2];
+    }
+    return sum / (d.length / 4); // 0–255
+  } catch(e) { return 128; }
+}
+
+function computeSpeechScore() {
+  const allText = keywords.join(' ').toLowerCase();
+  let score = 0;
+  CRISIS_WORDS.forEach(w => { if (allText.includes(w)) score += 30; });
+  MODERATE_WORDS.forEach(w => { if (allText.includes(w)) score += 15; });
+  return Math.min(score, 100);
+}
+
+function finalizeScan() {
+  // Stop camera & speech
+  if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+  if (recognition) { try { recognition.stop(); } catch(e) {} recognition = null; }
+
+  const sp = computeSpeechScore();
+
+  // Brightness: very dark (<60) or very bright (>210) both suggest distress
+  const bNorm = brightScore / 255; // 0–1
+  let bScore = 0;
+  if (bNorm < 0.25 || bNorm > 0.85) bScore = 70;
+  else if (bNorm < 0.35 || bNorm > 0.75) bScore = 40;
+  else bScore = 10;
+
+  // No camera: base only on speech (or random demo if nothing)
+  const combined = sp * 0.6 + bScore * 0.4;
+
+  let severity, theme, icon, desc;
+  if (combined >= 55 || sp >= 60) {
+    severity = 'CRITICAL'; theme = 'theme-critical'; icon = '🚨';
+    desc = 'Immediate attention required. Emergency services may be needed.';
+  } else if (combined >= 25 || sp >= 30) {
+    severity = 'MODERATE'; theme = 'theme-moderate'; icon = '⚠️';
+    desc = 'Elevated indicators detected. Monitor closely and seek care if worsening.';
+  } else {
+    severity = 'STABLE'; theme = 'theme-stable'; icon = '✅';
+    desc = 'No critical indicators detected. Continue monitoring if symptoms persist.';
+  }
+
+  scanOverlay.classList.remove('active');
+  timerCircle.style.strokeDashoffset = 132;
+  timerText.textContent = '3';
+
+  popupCard.className = 'popup-card ' + theme;
+  popupIcon.textContent = icon;
+  severityText.textContent = severity;
+  severityDesc.textContent = desc;
+  resultPopup.classList.add('active');
+}
+
+popupClose.addEventListener('click', () => {
+  resultPopup.classList.remove('active');
+});
+resultPopup.addEventListener('click', e => {
+  if (e.target === resultPopup) resultPopup.classList.remove('active');
+});
+</script>
+</body>
+</html>
